@@ -1,0 +1,207 @@
+"""E-Commerce Sales Analyzer - Python 3 console project.
+
+Required CSV columns: Order_ID, Product, Category, Quantity, Price.
+Revenue is calculated for each valid row as Quantity multiplied by Price.
+"""
+
+from pathlib import Path
+import sys
+
+import matplotlib.pyplot as plt
+import pandas as pd
+
+
+REQUIRED_COLUMNS = ["Order_ID", "Product", "Category", "Quantity", "Price"]
+
+
+def load_and_clean_orders(csv_path):
+    """Load orders, report invalid rows, and return a clean DataFrame."""
+    try:
+        raw_orders = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
+    except FileNotFoundError:
+        print(f"File not found: {csv_path}")
+        return pd.DataFrame(columns=REQUIRED_COLUMNS + ["Revenue"])
+    except pd.errors.EmptyDataError:
+        print("The CSV file is empty.")
+        return pd.DataFrame(columns=REQUIRED_COLUMNS + ["Revenue"])
+
+    missing = [column for column in REQUIRED_COLUMNS if column not in raw_orders.columns]
+    if missing:
+        print("Missing required column(s): " + ", ".join(missing))
+        return pd.DataFrame(columns=REQUIRED_COLUMNS + ["Revenue"])
+
+    cleaned_rows = []
+    seen_rows = set()
+
+    # start=1 labels the first data row as Row 1, as in the project test cases.
+    for row_number, row in enumerate(raw_orders[REQUIRED_COLUMNS].to_dict("records"), start=1):
+        order_id = str(row["Order_ID"]).strip()
+        product = str(row["Product"]).strip()
+        category = str(row["Category"]).strip()
+        quantity_text = str(row["Quantity"]).strip()
+        price_text = str(row["Price"]).strip()
+
+        if not order_id or not product or not category:
+            print(f"Row {row_number} skipped: Order_ID, Product and Category are required")
+            continue
+
+        try:
+            quantity_value = float(quantity_text)
+            if not quantity_value.is_integer() or quantity_value <= 0:
+                raise ValueError
+            quantity = int(quantity_value)
+        except ValueError:
+            print(f"Row {row_number} skipped: invalid Quantity '{quantity_text}'")
+            continue
+
+        try:
+            price = float(price_text)
+        except ValueError:
+            print(f"Row {row_number} skipped: invalid Price '{price_text}'")
+            continue
+
+        if price <= 0:
+            print(f"Row {row_number} skipped: Price must be positive")
+            continue
+
+        row_key = (order_id, product, category, quantity, price)
+        if row_key in seen_rows:
+            print(f"Row {row_number} skipped: duplicate row")
+            continue
+        seen_rows.add(row_key)
+
+        cleaned_rows.append(
+            {
+                "Order_ID": order_id,
+                "Product": product,
+                "Category": category,
+                "Quantity": quantity,
+                "Price": price,
+                "Revenue": quantity * price,
+            }
+        )
+
+    return pd.DataFrame(cleaned_rows, columns=REQUIRED_COLUMNS + ["Revenue"])
+
+
+def product_sales(orders):
+    """Return product-wise quantity and revenue using groupby aggregation."""
+    if orders.empty:
+        return pd.DataFrame(columns=["Product", "Units Sold", "Revenue"])
+
+    return (
+        orders.groupby("Product", as_index=False)
+        .agg(**{"Units Sold": ("Quantity", "sum"), "Revenue": ("Revenue", "sum")})
+        .sort_values("Revenue", ascending=False)
+    )
+
+
+def category_sales(orders):
+    """Return category-wise revenue using groupby aggregation."""
+    if orders.empty:
+        return pd.DataFrame(columns=["Category", "Revenue"])
+
+    return (
+        orders.groupby("Category", as_index=False)["Revenue"]
+        .sum()
+        .sort_values("Revenue", ascending=False)
+    )
+
+
+def print_summary(orders):
+    """Print total revenue, orders, units sold, and the best-selling product."""
+    if orders.empty:
+        print("No valid orders are available for analysis.")
+        return
+
+    total_revenue = orders["Revenue"].sum()
+    order_count = len(orders)
+    units_sold = orders["Quantity"].sum()
+    products = product_sales(orders)
+    top_product = products.iloc[0]
+
+    print("\nSales Summary")
+    print("-" * 30)
+    print(f"Total Revenue: {format_money(total_revenue)}")
+    print(f"Orders: {order_count}")
+    print(f"Units sold: {units_sold}")
+    print(f"Top product: {top_product['Product']} ({format_money(top_product['Revenue'])})")
+
+
+def print_category_revenue(orders):
+    """Print category revenue and display the required pie chart."""
+    categories = category_sales(orders)
+    if categories.empty:
+        print("No valid orders are available for analysis.")
+        return
+
+    total_revenue = categories["Revenue"].sum()
+    print("\nCategory-wise Revenue")
+    print("-" * 30)
+    for _, row in categories.iterrows():
+        percentage = row["Revenue"] * 100 / total_revenue
+        print(f"{row['Category']}: {format_money(row['Revenue'])} ({percentage:.2f}%)")
+
+    plt.figure(figsize=(7, 5))
+    plt.pie(
+        categories["Revenue"],
+        labels=categories["Category"],
+        autopct="%1.1f%%",
+        startangle=90,
+    )
+    plt.title("Category-wise Revenue")
+    plt.tight_layout()
+    plt.show()
+
+
+def show_top_products_chart(orders):
+    """Print top five products and display the required bar chart."""
+    products = product_sales(orders).head(5)
+    if products.empty:
+        print("No valid orders are available for analysis.")
+        return
+
+    print("\nTop 5 Products by Revenue")
+    print("-" * 30)
+    for _, row in products.iterrows():
+        print(f"{row['Product']}: {format_money(row['Revenue'])}")
+
+    plt.figure(figsize=(8, 5))
+    plt.bar(products["Product"], products["Revenue"], color="steelblue")
+    plt.title("Top 5 Products by Revenue")
+    plt.xlabel("Product")
+    plt.ylabel("Revenue (Rs.)")
+    plt.tight_layout()
+    plt.show()
+
+
+def format_money(value):
+    """Display whole rupee values without an unnecessary decimal point."""
+    value = float(value)
+    return str(int(value)) if value.is_integer() else f"{value:.2f}"
+
+
+def main():
+    csv_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("orders.csv")
+    orders = load_and_clean_orders(csv_path)
+    print(f"Loaded {len(orders)} valid order(s) from {csv_path}.")
+
+    while True:
+        print("\n1. Summary\n2. Category-wise revenue (pie chart)\n3. Top 5 products (bar chart)\n4. Exit")
+        choice = input("Choose an option: ").strip()
+
+        if choice == "1":
+            print_summary(orders)
+        elif choice == "2":
+            print_category_revenue(orders)
+        elif choice == "3":
+            show_top_products_chart(orders)
+        elif choice == "4":
+            print("Thank you.")
+            break
+        else:
+            print("Invalid menu option. Choose 1, 2, 3, or 4.")
+
+
+if __name__ == "__main__":
+    main()
